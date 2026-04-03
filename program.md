@@ -477,15 +477,19 @@ Golden flow tests (Jest + React Native Testing Library):
 ## 9. THE RATCHET LOOP
 
 The ratchet is the core quality enforcement mechanism of Nokta. Every PR must improve or maintain the current score. The score never drops. This is not a suggestion — it is a hard constraint enforced by CI.
-```
+
+> **Felsefi Temel (Philosophical Core):** Sistem geriye gidemez (entropy can never increase locally). Aynen mekanik bir mandal (ratchet) gibi, sadece ileri doğru (veya mevcut durumu koruyarak) hareket edilebilir. Her yeni kod, sistemdeki toplam kalite ve tutarlılığı artırmak zorundadır.
+
+```text
 Push code → PR opened
     ↓
 CI triggers
     ↓
-Hard Gates: tsc → eslint → bundle → deps
-    ├── ANY FAIL → ❌ REJECT (stop)
+Hard Gates & Checklists: tsc → eslint → bundle → deps → file count (≤10) → lines (≤500)
+    ├── ANY FAIL → ❌ REJECT (stop / no further evaluation)
     └── ALL PASS ↓
-Golden Flow Tests
+Golden Flow Tests & Local Verification
+    ├── Checklist Control: No immutable files touched?
     ├── pr_score = run tests on PR
     ├── main_score = run tests on main
     └── pr_score >= main_score?
@@ -494,7 +498,7 @@ Golden Flow Tests
     ↓
 Auto-merge (squash)
     ↓
-New baseline established
+New baseline established (ratchet clicks forward indefinitely)
 ```
 
 **Score never drops. This is the ratchet.**
@@ -505,9 +509,11 @@ Traditional code review relies on human judgment, which is slow, inconsistent, a
 
 This pattern is inspired by Karpathy's autoresearch model: a single measurable scalar drives all contribution decisions. Contributors compete to improve the same number. The highest score wins.
 
-### Merge Queue
+**Yorum (Interpretation):** İnsan hislerine dayalı kod incelemesi ölçeklenemez (unscalable). Bir AI ajanı olarak veya insan katılımcı olarak kod yazarken tek bir sorunuz olmalı: "Bu metrik yükselecek mi?" Kodunuz ne kadar zarif görünürse görünsün, PR Checklist (özellikle testlerin geçmesi ve limitlere uyulması) kurallarını aşamıyorsa veya puan tablosunda bir artışa (yahut mevcut statüyü korumaya) neden olmuyorsa bu bir gürültüdür (noise). Ratchet, bu gürültüyü acımasızca filtreler.
 
-One PR merges at a time. After a merge, all waiting PRs receive a fresh CI run against the new baseline.
+### Merge Queue & Concurrency Limits
+
+One PR merges at a time. After a merge, all waiting PRs receive a fresh CI run against the new baseline. This guarantees that parallel work doesn't degrade the cumulative score.
 
 Rules:
 - The active PR is the lock holder. No PR jumps the queue.
@@ -515,27 +521,29 @@ Rules:
 - Manual overrides by maintainers are forbidden. Skipping the queue breaks the ratchet math for all waiting PRs.
 - If two PRs target the same section, the first to merge sets the new baseline. The second must beat it.
 
+**Ek Detay (Additional Detail):** Queue sırasındaki gecikmeleri azaltmak için katılımcıların en fazla 10 dosya ve 500 satır limitine uymaları (Bkz. Section 10: Checklist) kritik öneme sahiptir. Küçük, atomik (atomic) PR'lar sıradan hızla geçerken devasa PR'lar hem CI süresini uzatır hem de ret riskini artırır. O yüzden büyük değişiklikleri iteratif şekilde yapın.
+
 ### What Triggers a CI Run
 
-| Event | CI Triggered? |
-|---|---|
-| PR opened | ✅ Yes |
-| New commit pushed to PR branch | ✅ Yes |
-| PR base branch updated (merge queue) | ✅ Yes |
-| PR comment added | ❌ No |
-| PR description edited | ❌ No |
-| Draft PR converted to ready | ✅ Yes |
+| Event | CI Triggered? | Ekstra Şart & Süreç |
+|---|---|---|
+| PR opened | ✅ Yes | Checklist doğrulaması (dosya limiti, immutable dosya kontrolü) başlar. |
+| New commit pushed to PR branch | ✅ Yes | Önceki CI iptal edilir (cancel redundant runs). |
+| PR base branch updated (merge queue) | ✅ Yes | Main senkronizasyonu sağlanır. |
+| PR comment added | ❌ No | Yalnızca tartışma, kod değişmedi. |
+| PR description edited | ❌ No | Yalnızca metin, kod değişmedi. |
+| Draft PR converted to ready | ✅ Yes | Ratchet devriyesi başlar. |
 
-Every `git push` re-triggers CI. Fix → push → wait.
+Every `git push` re-triggers CI. Fix → push → wait. Hata yaparsanız, sakince yerel testlerinizi (`npm test`, `npx tsc --noEmit`) tekrar çalıştırıp baştan pushlayın.
 
 ### Rerun + Rescore Protocol
 
-If your PR is rejected, follow these steps:
+If your PR is rejected, follow these steps systematically:
 
-1. Read the CI comment carefully. It lists which checklist items failed and the score delta.
+1. Read the CI comment carefully. It lists which checklist items failed and the score delta. Check if you accidentally modified an immutable file or exceeded the 500-line limit.
 2. Pull the latest main to check if someone else merged and raised the baseline: `git fetch origin && git rebase origin/main`
 3. Fix the failing items in `program.md` or your spec file.
-4. Re-run the score locally before pushing: `python scripts/section_score.py --section <N>`
+4. Re-run the score locally before pushing: `python scripts/section_score.py --section <N>`. Also ensure local hard gates (`npm test`, `eslint`) pass as required by the checklist.
 5. Push the fix: `git push origin <your-branch>`
 6. CI re-runs automatically. The sticky comment in the PR refreshes in place — no new comment is posted.
 
@@ -555,15 +563,17 @@ A PR passes only if **all modified sections** have delta ≥ 0. A single section
 
 ### Baseline Reset Policy
 
-The baseline (main branch score) is sacred. It can only move up, never down. If a bug in the scoring script causes an artificially high score to be merged, the maintainer may issue a baseline correction — but this requires a public issue and a maintainer-signed commit. Contributors are notified via PR comments on all open PRs.
+The baseline (main branch score) is sacred. It can only move up, never down. If a bug in the scoring script causes an artificially high score to be merged, the maintainer may issue a baseline correction — but this requires a public issue and a maintainer-signed commit. Contributors are notified via PR comments on all open PRs. Bu politika "The Ratchet"in bozulmaz (incorruptible) doğasının bir kanıtıdır.
 
 ### Anti-Patterns That Break the Ratchet
 
+Review these anti-patterns carefully before committing:
+
 - **Deleting content to game the score** — removing sections or checklist items that you cannot improve will lower your score, not raise it.
-- **Adding TODO placeholders** — `> TODO:` lines are penalized by the scoring script. Never leave them in.
+- **Adding TODO placeholders** — `> TODO:` lines are penalized by the scoring script. Never leave them in. Geliştirme tamamsa tamamdır, değilse PR henüz hazır değildir.
 - **Copying from main verbatim** — a PR that does not change anything scores identically to main (delta = 0). Delta 0 passes, but wastes a queue slot.
 - **Opening multiple PRs for the same section** — only one can merge. The rest must rebase and beat the new baseline.
-```
+- **Ignoring PR Checklist constraints** — PR'ın 500 satırdan fazla veya 10 dosyadan büyük olması Ratchet mantığını engeller. Ratchet sadece küçük (bite-sized) ve odaklanılmış değişikliklerle sağlıklı bir şekilde çalışır. Test edilmemiş, immutable infra'yı bozan veya gereksiz paket ekleyen PR'lar derhal "Hard Gates" duvarına çarpar.
 
 ---
 
